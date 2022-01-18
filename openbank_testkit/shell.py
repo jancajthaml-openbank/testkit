@@ -47,7 +47,6 @@ class Shell(object):
         for sig in [signal.SIGTERM, signal.SIGQUIT, signal.SIGKILL, signal.SIGKILL]:
           if p.poll():
             break
-
           try:
             os.kill(p.pid, sig)
           except OSError:

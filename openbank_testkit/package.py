@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import platform
 import tarfile
 import tempfile
 import functools
-import errno
 import os
 import sys
 import json
@@ -14,6 +12,84 @@ from distutils.version import StrictVersion
 from .shell import Shell
 from .platform import Platform
 from .http import Request
+
+
+class Docker(object):
+
+  @staticmethod 
+  def __get_auth_head(repository):
+    uri = 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:pull'.format(repository)
+    request = Request(method='GET', url=uri)
+    response = request.do()
+    assert response.status == 200, 'unable to authorize docker pull for {}'.format(repository)
+    data = json.loads(response.read().decode('utf-8'))
+    return {
+      'Authorization':'Bearer {}'.format(data['token']),
+      'Accept': 'application/vnd.docker.distribution.manifest.v2+json'
+    }
+
+  @staticmethod
+  def get_metadata(repository, tag):
+    uri = 'https://index.docker.io/v2/{}/manifests/{}'.format(repository, tag)
+
+    auth_headers = Docker.__get_auth_head(repository)
+
+    request = Request(method='GET', url=uri)
+    for key, value in auth_headers.items():
+      request.add_header(key, value)
+    response = request.do()
+    assert response.status == 200, 'unable to obtain metadata of {}:{}'.format(repository, tag)
+    data = json.loads(response.read().decode('utf-8'))
+    return {
+      'layers': data['layers'],
+      'digest': data['config']['digest']
+    }
+
+  @staticmethod
+  def extract_file(repository, digest, source, target):
+    file = source.strip(os.path.sep)
+    uri = 'https://index.docker.io/v2/{}/blobs/{}'.format(repository, digest)
+
+    auth_headers = Docker.__get_auth_head(repository)
+    request = Request(method='GET', url=uri)
+    for key, value in auth_headers.items():
+      request.add_header(key, value)
+    response = request.do()
+    assert response.status == 200, 'unable to download layer {}:{}'.format(repository, digest)
+
+    fileobj = io.BytesIO()
+    content_length = response.getheader("Content-Length")
+
+    if content_length is not None:
+      try:
+        content_length = int(content_length)
+      except ValueError:
+        content_length = None
+      if content_length:
+        fileobj.seek(content_length - 1)
+        fileobj.write(b"\0")
+        fileobj.seek(0)
+
+    while 1:
+      buf = response.read(4 * 1024)
+      if not buf:
+        break
+      fileobj.write(buf)
+
+    fileobj.seek(0)
+
+    tarf = tarfile.open(fileobj=fileobj, mode='r:gz')
+
+    for member in tarf.getmembers():
+      if member.name != file:
+        continue
+      tmp_dir = tempfile.TemporaryDirectory()
+      tarf.extract(member, path=tmp_dir.name)
+      os.rename(os.path.join(tmp_dir.name, file), os.path.join(target, os.path.basename(file)))
+      tmp_dir.cleanup()
+      return True
+
+    return False
 
 
 class Package(object):
@@ -57,81 +133,6 @@ class Package(object):
 
     return latest['version']
 
-  def __get_auth_head(self, repository):
-    uri = 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:pull'.format(repository)
-    request = Request(method='GET', url=uri)
-    response = request.do()
-    assert response.status == 200, 'unable to authorize docker pull'
-    data = json.loads(response.read().decode('utf-8'))
-    return {
-      'Authorization':'Bearer {}'.format(data['token']),
-      'Accept': 'application/vnd.docker.distribution.manifest.v2+json'
-    }
-
-  def __get_metadata(self, repository, tag):
-    uri = 'https://index.docker.io/v2/{}/manifests/{}'.format(repository, tag)
-
-    auth_headers = self.__get_auth_head(repository)
-
-    request = Request(method='GET', url=uri)
-    for key, value in auth_headers.items():
-      request.add_header(key, value)
-    response = request.do()
-    assert response.status == 200, 'unable to docker pull layers and config info'
-    data = json.loads(response.read().decode('utf-8'))
-    return {
-      'layers': data['layers'],
-      'digest': data['config']['digest']
-    }
-
-  def __extract_file(self, repository, digest, source, target):
-    file = source.strip(os.path.sep)
-    uri = 'https://index.docker.io/v2/{}/blobs/{}'.format(repository, digest)
-
-    auth_headers = self.__get_auth_head(repository)
-    request = Request(method='GET', url=uri)
-    for key, value in auth_headers.items():
-      request.add_header(key, value)
-    response = request.do()
-    assert response.status == 200, 'unable to docker pull layer data'
-
-    fileobj = io.BytesIO()
-
-    content_length = response.getheader("Content-Length")
-
-    if content_length is not None:
-      try:
-        content_length = int(content_length)
-      except ValueError:
-        content_length = None
-      if content_length:
-        fileobj.seek(content_length - 1)
-        fileobj.write(b"\0")
-        fileobj.seek(0)
-
-    window = 4 * 1024
-
-    while 1:
-      buf = response.read(window)
-      if not buf:
-        break
-      fileobj.write(buf)
-
-    fileobj.seek(0)
-
-    tarf = tarfile.open(fileobj=fileobj, mode='r:gz')
-
-    for member in tarf.getmembers():
-      if member.name != file:
-        continue
-      tmp_dir = tempfile.TemporaryDirectory()
-      tarf.extract(member, path=tmp_dir.name)
-      os.rename(os.path.join(tmp_dir.name, file), os.path.join(target, os.path.basename(file)))
-      tmp_dir.cleanup()
-      return True
-
-    return False
-
   def download(self, version, meta, output):
     os.makedirs(output, exist_ok=True)
 
@@ -140,15 +141,15 @@ class Package(object):
     if os.path.exists(package):
       return True
 
-    os.makedirs(os.path.dirname(package), exist_ok=True)
-
-    metadata = self.__get_metadata('openbank/{}'.format(self.__name), '{}-{}.{}'.format(Platform.arch, version, meta))
+    repository = 'openbank/{}'.format(self.__name)
+    tag = '{}-{}.{}'.format(Platform.arch, version, meta)
+    metadata = Docker.get_metadata(repository, tag)
 
     if len(metadata['layers']):
       metadata['layers'].pop()
 
     for layer in metadata['layers']:
-      if self.__extract_file('openbank/{}'.format(self.__name), layer['digest'], '/opt/artifacts/{}_{}_{}.deb'.format(self.__name, version, Platform.arch), output):
+      if Docker.extract_file(repository, layer['digest'], '/opt/artifacts/{}'.format(package), output):
         return os.path.exists(package)
 
     return False
