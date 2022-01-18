@@ -8,7 +8,7 @@ with open(os.path.abspath(os.path.join(__file__, os.pardir, "README.md")), 'r') 
 
 
 setup(name='openbank-testkit',
-  version='0.12',
+  version='0.14',
   description='openbank testkit libraries',
   long_description=README,
   long_description_content_type="text/markdown",
@@ -18,8 +18,7 @@ setup(name='openbank-testkit',
   license='Apache 2.0',
   packages=['openbank_testkit'],
   install_requires=[
-    'requests==2.19.1',
-    'docker==5.0.3'
+    'requests==2.19.1'
   ],
   zip_safe=False,
   entry_points = {}

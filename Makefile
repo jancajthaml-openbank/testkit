@@ -1,7 +1,7 @@
 .ONESHELL:
 
 .PHONY: all
-all: package
+all: clean package
 
 .PHONY: clean
 clean:
@@ -13,6 +13,10 @@ clean:
 package:
 	@python3 setup.py sdist bdist_wheel
 	@python3 -m twine check dist/*
+
+.PHONY: install
+install:
+	@python3 setup.py install --user
 
 .PHONY: publish
 publish:

@@ -15,8 +15,11 @@ class RealResponse(object):
   def __init__(self, response):
     self.response = response
 
-  def read(self):
-    return self.response.read()
+  def read(self, chunk_size=None):
+    return self.response.read(chunk_size)
+
+  def getheader(self, key):
+    return self.response.getheader(key)
 
   @property
   def content_type(self):
@@ -33,8 +36,11 @@ class StubResponse(object):
     self.status = status
     self.__body = body
 
-  def read(self):
-    return self.__body.read()
+  def read(self, chunk_size=None):
+    return self.__body.read(chunk_size)
+
+  def getheader(self, key):
+    return None
 
   @property
   def content_type(self):

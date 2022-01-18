@@ -9,11 +9,10 @@ import errno
 import os
 import sys
 import json
+import io
 from distutils.version import StrictVersion
-
 from .shell import Shell
 from .platform import Platform
-from .docker import Docker
 from .http import Request
 
 
@@ -38,19 +37,13 @@ class Package(object):
 
     for entry in body:
       version = entry['name']
-      parts = version.split('-')
-      if parts[0] != Platform.arch:
+      if not version.startswith('{}-'.format(Platform.arch)):
         continue
-
-      if len(parts) < 2:
+      if not version.endswith('.main'):
         continue
-
-      if not parts[1].endswith('.main'):
-        continue
-
       tags.append({
-        'semver': StrictVersion(parts[1][:-5]),
-        'version': parts[1][:-5],
+        'semver': StrictVersion(version[len(Platform.arch)+1:-5]),
+        'version': version[len(Platform.arch)+1:-5],
         'tag': entry['name'],
         'ts': entry['tag_last_pushed']
       })
@@ -64,65 +57,99 @@ class Package(object):
 
     return latest['version']
 
-  def verify(self, file):
-    (code, result, error) = Shell.run(['dpkg', '-c', file])
-    if code != 'OK':
-      raise RuntimeError('code: {}, stdout: [{}], stderr: [{}]'.format(code, result, error))
+  def __get_auth_head(self, repository):
+    uri = 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:pull'.format(repository)
+    request = Request(method='GET', url=uri)
+    response = request.do()
+    assert response.status == 200, 'unable to authorize docker pull'
+    data = json.loads(response.read().decode('utf-8'))
+    return {
+      'Authorization':'Bearer {}'.format(data['token']),
+      'Accept': 'application/vnd.docker.distribution.manifest.v2+json'
+    }
 
-  def download(self, version, meta):
-    failure = None
-    os.makedirs('/tmp/packages', exist_ok=True)
+  def __get_metadata(self, repository, tag):
+    uri = 'https://index.docker.io/v2/{}/manifests/{}'.format(repository, tag)
 
-    package = '/tmp/packages/{}_{}_{}.deb'.format(self.__name, version, Platform.arch)
+    auth_headers = self.__get_auth_head(repository)
+
+    request = Request(method='GET', url=uri)
+    for key, value in auth_headers.items():
+      request.add_header(key, value)
+    response = request.do()
+    assert response.status == 200, 'unable to docker pull layers and config info'
+    data = json.loads(response.read().decode('utf-8'))
+    return {
+      'layers': data['layers'],
+      'digest': data['config']['digest']
+    }
+
+  def __extract_file(self, repository, digest, source, target):
+    file = source.strip(os.path.sep)
+    uri = 'https://index.docker.io/v2/{}/blobs/{}'.format(repository, digest)
+
+    auth_headers = self.__get_auth_head(repository)
+    request = Request(method='GET', url=uri)
+    for key, value in auth_headers.items():
+      request.add_header(key, value)
+    response = request.do()
+    assert response.status == 200, 'unable to docker pull layer data'
+
+    fileobj = io.BytesIO()
+
+    content_length = response.getheader("Content-Length")
+
+    if content_length is not None:
+      try:
+        content_length = int(content_length)
+      except ValueError:
+        content_length = None
+      if content_length:
+        fileobj.seek(content_length - 1)
+        fileobj.write(b"\0")
+        fileobj.seek(0)
+
+    window = 4 * 1024
+
+    while 1:
+      buf = response.read(window)
+      if not buf:
+        break
+      fileobj.write(buf)
+
+    fileobj.seek(0)
+
+    tarf = tarfile.open(fileobj=fileobj, mode='r:gz')
+
+    for member in tarf.getmembers():
+      if member.name != file:
+        continue
+      tmp_dir = tempfile.TemporaryDirectory()
+      tarf.extract(member, path=tmp_dir.name)
+      os.rename(os.path.join(tmp_dir.name, file), os.path.join(target, os.path.basename(file)))
+      tmp_dir.cleanup()
+      return True
+
+    return False
+
+  def download(self, version, meta, output):
+    os.makedirs(output, exist_ok=True)
+
+    package = '{}/{}_{}_{}.deb'.format(output, self.__name, version, Platform.arch)
 
     if os.path.exists(package):
-      self.verify(package)
-      return
+      return True
 
     os.makedirs(os.path.dirname(package), exist_ok=True)
 
-    image_s = 'docker.io/openbank/{}:{}-{}.{}'.format(self.__name, Platform.arch, version, meta)
-    package_s = '/opt/artifacts/{}_{}_{}.deb'.format(self.__name, version, Platform.arch)
+    metadata = self.__get_metadata('openbank/{}'.format(self.__name), '{}-{}.{}'.format(Platform.arch, version, meta))
 
-    scratch_docker_cmd = ['FROM alpine']
+    if len(metadata['layers']):
+      metadata['layers'].pop()
 
-    scratch_docker_cmd.append('COPY --from={} {} {}'.format(image_s, package_s, package))
+    for layer in metadata['layers']:
+      if self.__extract_file('openbank/{}'.format(self.__name), layer['digest'], '/opt/artifacts/{}_{}_{}.deb'.format(self.__name, version, Platform.arch), output):
+        return os.path.exists(package)
 
-    tag = 'bbtest_{}-artifacts-scratch'.format(self.__name)
-    temp = tempfile.NamedTemporaryFile(delete=True)
-    try:
-      with open(temp.name, 'w') as fd:
-        fd.write(str(os.linesep).join(scratch_docker_cmd))
-      image, stream = Docker.images.build(fileobj=temp, rm=True, pull=True, tag=tag)
-      for chunk in stream:
-        if not 'stream' in chunk:
-          continue
-        for line in chunk['stream'].splitlines():
-          l = line.strip(os.linesep)
-          if not len(l):
-            continue
-          sys.stderr.write(l+'\n')
+    return False
 
-      scratch = Docker.containers.run(tag, ['/bin/true'], detach=True)
-
-      tar_name = tempfile.NamedTemporaryFile(delete=True)
-      with open(tar_name.name, 'wb') as fd:
-        bits, stat = scratch.get_archive(package)
-        for chunk in bits:
-          fd.write(chunk)
-
-      archive = tarfile.TarFile(tar_name.name)
-      archive.extract(os.path.basename(package), os.path.dirname(package))
-      self.verify(package)
-      scratch.remove()
-    except Exception as ex:
-      failure = ex
-    finally:
-      temp.close()
-      try:
-        Docker.images.remove(tag, force=True)
-      except:
-        pass
-
-    if failure:
-      raise failure
