@@ -28,7 +28,7 @@ class Docker(object):
     
     data = json.loads(response.read().decode('utf-8'))
     return {
-      'Authorization':'Bearer {}'.format(data['token']),
+      'Authorization': 'Bearer {}'.format(data['token']),
       'Accept': 'application/vnd.docker.distribution.manifest.v2+json'
     }
 
