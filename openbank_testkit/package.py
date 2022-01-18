@@ -136,7 +136,8 @@ class Package(object):
   def download(self, version, meta, output):
     os.makedirs(output, exist_ok=True)
 
-    package = '{}/{}_{}_{}.deb'.format(output, self.__name, version, Platform.arch)
+    file = '{}_{}_{}.deb'.format(self.__name, version, Platform.arch)
+    package = '{}/{}'.format(output, file)
 
     if os.path.exists(package):
       return True
@@ -149,7 +150,7 @@ class Package(object):
       metadata['layers'].pop()
 
     for layer in metadata['layers']:
-      if Docker.extract_file(repository, layer['digest'], '/opt/artifacts/{}'.format(package), output):
+      if Docker.extract_file(repository, layer['digest'], '/opt/artifacts/{}'.format(file), output):
         return os.path.exists(package)
 
     return False
