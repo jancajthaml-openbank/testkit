@@ -53,7 +53,7 @@ class Request(object):
     self.__underlying = urllib.request.Request(**kwargs)
 
   def add_header(self, key, value):
-    self.__underlying.add_header(key, value)
+    self.__underlying.add_unredirected_header(key, value)
 
   @property
   def data(self):

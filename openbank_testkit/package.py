@@ -5,6 +5,7 @@ import tarfile
 import tempfile
 import functools
 import os
+import shutil
 import sys
 import json
 import io
@@ -19,9 +20,12 @@ class Docker(object):
   @staticmethod 
   def __get_auth_head(repository):
     uri = 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:pull'.format(repository)
+    
     request = Request(method='GET', url=uri)
     response = request.do()
-    assert response.status == 200, 'unable to authorize docker pull for {}'.format(repository)
+    
+    assert response.status == 200, 'unable to authorize docker pull for {} with {} {}'.format(repository, response.status, response.read().decode('utf-8'))
+    
     data = json.loads(response.read().decode('utf-8'))
     return {
       'Authorization':'Bearer {}'.format(data['token']),
@@ -31,14 +35,15 @@ class Docker(object):
   @staticmethod
   def get_metadata(repository, tag):
     uri = 'https://index.docker.io/v2/{}/manifests/{}'.format(repository, tag)
-
+    
     auth_headers = Docker.__get_auth_head(repository)
-
     request = Request(method='GET', url=uri)
     for key, value in auth_headers.items():
       request.add_header(key, value)
     response = request.do()
-    assert response.status == 200, 'unable to obtain metadata of {}:{}'.format(repository, tag)
+    
+    assert response.status == 200, 'unable to obtain metadata of {}:{} with {} {}'.format(repository, tag, response.status, response.read().decode('utf-8'))
+    
     data = json.loads(response.read().decode('utf-8'))
     return {
       'layers': data['layers'],
@@ -46,16 +51,19 @@ class Docker(object):
     }
 
   @staticmethod
-  def extract_file(repository, digest, source, target):
-    file = source.strip(os.path.sep)
-    uri = 'https://index.docker.io/v2/{}/blobs/{}'.format(repository, digest)
-
+  def extract_file(repository, layer, source, target):
+    if len(layer.get('urls', [])):
+      uri = layer['urls'][0]
+    else:
+      uri = 'https://index.docker.io/v2/{}/blobs/{}'.format(repository, layer['digest'])
+    
     auth_headers = Docker.__get_auth_head(repository)
     request = Request(method='GET', url=uri)
     for key, value in auth_headers.items():
       request.add_header(key, value)
     response = request.do()
-    assert response.status == 200, 'unable to download layer {}:{}'.format(repository, digest)
+
+    assert response.status == 200, 'unable to download layer {}:{} with {} {}'.format(repository, layer['digest'], response.status, response.read().decode('utf-8'))
 
     fileobj = io.BytesIO()
     content_length = response.getheader("Content-Length")
@@ -79,13 +87,14 @@ class Docker(object):
     fileobj.seek(0)
 
     tarf = tarfile.open(fileobj=fileobj, mode='r:gz')
+    file = source.strip(os.path.sep)
 
     for member in tarf.getmembers():
       if member.name != file:
         continue
       tmp_dir = tempfile.TemporaryDirectory()
       tarf.extract(member, path=tmp_dir.name)
-      os.rename(os.path.join(tmp_dir.name, file), os.path.join(target, os.path.basename(file)))
+      shutil.move(os.path.join(tmp_dir.name, file), os.path.join(target, os.path.basename(file)))
       tmp_dir.cleanup()
       return True
 
@@ -150,7 +159,7 @@ class Package(object):
       metadata['layers'].pop()
 
     for layer in metadata['layers']:
-      if Docker.extract_file(repository, layer['digest'], '/opt/artifacts/{}'.format(file), output):
+      if Docker.extract_file(repository, layer, '/opt/artifacts/{}'.format(file), output):
         return os.path.exists(package)
 
     return False
