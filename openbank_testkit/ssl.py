@@ -25,6 +25,14 @@ class SelfSignedCeritifate(object):
     fd.write('extendedKeyUsage=serverAuth\n')
     fd.write('subjectAltName = DNS:localhost,IP:127.0.0.1')
 
+  def __del__(self):
+    self.__ca_key.close()
+    self.__ca_crt.close()
+    self.__key.close()
+    self.__csr.close()
+    self.__crt.close()
+    self.__ext.close()
+
   @property
   def keyfile(self):
     return self.__key.name
@@ -38,7 +46,9 @@ class SelfSignedCeritifate(object):
     return self.__ca_crt.name
 
   def generate(self):
-    pwd = ''.join(random.choice(string.ascii_lowercase) for i in range(10))
+    secure_random = random.SystemRandom()
+
+    pwd = ''.join(secure_random.choice(string.ascii_lowercase) for i in range(10))
     # ca
     os.system('openssl genrsa -des3 -passout pass:{} -out "{}" 2048 > /dev/null 2>&1'.format(pwd, self.__ca_key.name))
     os.system('openssl req -x509 -new -nodes -passin pass:{} -key "{}" -sha256 -days 1825 -out "{}" -subj /CN={}.ca > /dev/null 2>&1'.format(pwd, self.__ca_key.name, self.__ca_crt.name, self.__name))
@@ -52,11 +62,3 @@ class SelfSignedCeritifate(object):
     # trust ca
     os.system('cp {} /usr/local/share/ca-certificates/{}.crt'.format(self.__ca_crt.name, os.path.basename(self.__ca_crt.name)))
     os.system('update-ca-certificates > /dev/null 2>&1')
-
-  def cleanup(self):
-    self.__ca_key.close()
-    self.__ca_crt.close()
-    self.__key.close()
-    self.__csr.close()
-    self.__crt.close()
-    self.__ext.close()

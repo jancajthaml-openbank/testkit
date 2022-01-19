@@ -8,7 +8,7 @@ with open(os.path.abspath(os.path.join(__file__, os.pardir, "README.md")), 'r') 
 
 
 setup(name='openbank-testkit',
-  version='0.29',
+  version='0.30',
   description='openbank testkit libraries',
   long_description=README,
   long_description_content_type="text/markdown",

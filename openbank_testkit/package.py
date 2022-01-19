@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import tarfile
-import tempfile
 import functools
 import os
 import shutil
@@ -92,10 +91,8 @@ class Docker(object):
     for member in tarf.getmembers():
       if member.name != file:
         continue
-      tmp_dir = tempfile.TemporaryDirectory()
-      tarf.extract(member, path=tmp_dir.name)
-      shutil.move(os.path.join(tmp_dir.name, file), os.path.join(target, os.path.basename(file)))
-      tmp_dir.cleanup()
+      with open(os.path.join(target, os.path.basename(file)), 'w+b') as fd:
+        fd.write(tarf.extractfile(member))
       return True
 
     return False
