@@ -13,21 +13,25 @@ from io import BytesIO
 class RealResponse(object):
 
   def __init__(self, response):
-    self.response = response
+    self.__underlying = response
 
   def read(self, chunk_size=None):
-    return self.response.read(chunk_size)
+    return self.__underlying.read(chunk_size)
 
   def getheader(self, key):
-    return self.response.getheader(key)
+    return self.__underlying.getheader(key)
 
   @property
   def content_type(self):
-    return self.response.info().get_content_type()
+    return self.__underlying.info().get_content_type()
 
   @property
   def status(self):
-    return self.response.status
+    return self.__underlying.status
+
+  def __del__(self):
+    self.read()
+    del self.__underlying
 
 
 class StubResponse(object):
