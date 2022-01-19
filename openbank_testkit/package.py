@@ -21,9 +21,8 @@ class Docker(object):
 
   @staticmethod
   def __print(msg):
-    filler_len = max(0, Docker.__last_line_len-len(msg))
+    filler_len = max(0, Docker.__last_line_len-len(msg)) + 2
     Docker.__last_line_len = len(msg)
-
     if len(msg):
       if msg[-1] == '\n':
         sys.stdout.write("\r\033[K" + msg[:-1] + ' '*filler_len + '\n')
@@ -48,13 +47,11 @@ class Docker(object):
     for i in range(0, 49 - nb_traits):
       line_len += 1
       sys.stdout.write(' ')
-
     tail = '] {}/{}'.format(done, total)
     line_len += len(tail)
     sys.stdout.write(tail)
-    filler_len = max(0, Docker.__last_line_len-line_len)
-    if filler_len:
-      sys.stdout.write(' '*filler_len)
+    filler_len = max(0, Docker.__last_line_len-line_len) + 2
+    sys.stdout.write(' '*filler_len)
     sys.stdout.flush()
     Docker.__last_line_len = line_len
 
@@ -133,6 +130,10 @@ class Docker(object):
     Docker.__print('{}: Downloaded Layer'.format(tag))
 
     del response
+
+    if downloaded_size != total_size:
+      Docker.__print('')
+      return False
 
     file = source.strip(os.path.sep)
     Docker.__print('{}: Scanning Layer for /{} ...'.format(tag, file))
