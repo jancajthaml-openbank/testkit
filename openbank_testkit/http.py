@@ -7,7 +7,7 @@ import urllib.response
 import socket
 import time
 import http
-from io import BytesIO
+import io
 
 
 class RealResponse(object):
@@ -15,8 +15,8 @@ class RealResponse(object):
   def __init__(self, response):
     self.__underlying = response
 
-  def read(self, chunk_size=None):
-    return self.__underlying.read(chunk_size)
+  def read(self, *args, **kwargs):
+    return self.__underlying.read(*args, **kwargs)
 
   def getheader(self, key):
     return self.__underlying.getheader(key)
@@ -30,7 +30,7 @@ class RealResponse(object):
     return self.__underlying.status
 
   def __del__(self):
-    self.read()
+    self.__underlying.read()
     del self.__underlying
 
 
@@ -40,8 +40,8 @@ class StubResponse(object):
     self.status = status
     self.__body = body
 
-  def read(self, chunk_size=None):
-    return self.__body.read(chunk_size)
+  def read(self, *args, **kwargs):
+    return self.__body.read(*args, **kwargs)
 
   def getheader(self, key):
     return None
@@ -87,7 +87,7 @@ class Request(object):
       try:
         return RealResponse(urllib.request.urlopen(self.__underlying, timeout=timeout, context=ctx))
       except (http.client.RemoteDisconnected, socket.timeout, ssl.SSLError) as err:
-        return StubResponse(504, BytesIO(str(err).encode('utf-8')))
+        return StubResponse(504, io.BytesIO(str(err).encode('utf-8')))
       except urllib.error.HTTPError as err:
         return StubResponse(err.code, err)
       except urllib.error.URLError as err:

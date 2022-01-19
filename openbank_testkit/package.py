@@ -96,6 +96,7 @@ class Docker(object):
   @staticmethod
   def extract_file(repository, layer, source, target):
     tag = repository + ':sha256(' + layer['digest'][7:19] + ')'
+    file = source.strip(os.path.sep)
 
     Docker.__print('{}: Downloading...'.format(tag))
 
@@ -135,7 +136,6 @@ class Docker(object):
       Docker.__print('')
       return False
 
-    file = source.strip(os.path.sep)
     Docker.__print('{}: Scanning Layer for /{} ...'.format(tag, file))
 
     tarf = tarfile.open(fileobj.name, mode='r:gz')
