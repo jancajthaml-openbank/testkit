@@ -107,7 +107,10 @@ class Docker(object):
     tag = repository + ':sha256(' + layer['digest'][7:19] + ')'
     file = source.strip(os.path.sep)
 
-    uri = 'https://index.docker.io/v2/{}/blobs/{}'.format(repository, layer['digest'])
+    if len(layer.get('urls', [])):
+      uri = layer['urls'][0]
+    else:
+      uri = 'https://index.docker.io/v2/{}/blobs/{}'.format(repository, layer['digest'])
     
     auth_headers = Docker.__get_auth_head(repository)
     request = Request(method='GET', url=uri)
