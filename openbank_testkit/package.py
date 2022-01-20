@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import tarfile
-import tempfile
+import io
 import functools
 import os
 import shutil
@@ -22,43 +22,55 @@ class Docker(object):
   @staticmethod
   def __print(msg):
     filler_len = max(0, Docker.__last_line_len-len(msg)) + 2
-    Docker.__last_line_len = len(msg)
+    sys.stdout.write('\r')
     if len(msg):
       if msg[-1] == '\n':
-        sys.stdout.write("\r\033[K" + msg[:-1] + ' '*filler_len + '\n')
+        if filler_len:
+          sys.stdout.write(msg[:-1])
+          sys.stdout.write(' '*filler_len)
+          sys.stdout.write('\n')
+        else:
+          sys.stdout.write(msg)
+          sys.stdout.write('\r')
       else:
-        sys.stdout.write("\r\033[K" + msg + ' '*filler_len)
-    else:
-      sys.stdout.write("\r\033[K" + ' '*filler_len)
-    sys.stdout.flush()    
+        sys.stdout.write(msg)
+        if filler_len:
+          sys.stdout.write(' '*filler_len)
+        sys.stdout.write('\r')
+    elif filler_len:
+      sys.stdout.write(' '*filler_len)
+      sys.stdout.write('\r')
+    sys.stdout.flush()
+    Docker.__last_line_len = len(msg)
 
   @staticmethod
-  def __progress_bar(ublob, done, total):
+  def __progress_bar(prefix, done, total):
     line_len = 0
-    nb_traits = int(50*done/total)
-    sys.stdout.write('\r' + ublob + ': Downloading [')
-    line_len += len(ublob) + 15
-    for i in range(0, nb_traits):
-      line_len += 1
-      if i == nb_traits - 1:
-        sys.stdout.write('>')
-      else:
-        sys.stdout.write('=')
-    for i in range(0, 49 - nb_traits):
-      line_len += 1
-      sys.stdout.write(' ')
+    nb_traits = min(50, int(50*done/total))
+    sys.stdout.write('\r' + prefix + ' [')
+    line_len += len(prefix) + 2
+    if nb_traits < 50:
+      for i in range(1, 51, 1):
+        if i == nb_traits:
+          sys.stdout.write('>')
+        elif i < nb_traits:
+          sys.stdout.write('=')
+        else:
+          sys.stdout.write(' ')
+    else:
+      sys.stdout.write('=' * 50)
     tail = '] {}/{}'.format(done, total)
-    line_len += len(tail)
+    line_len += len(tail) + 50
     sys.stdout.write(tail)
     filler_len = max(0, Docker.__last_line_len-line_len) + 2
-    sys.stdout.write(' '*filler_len)
+    if filler_len:
+      sys.stdout.write(' '*filler_len)
+    sys.stdout.write('\r')
     sys.stdout.flush()
     Docker.__last_line_len = line_len
 
   @staticmethod
   def __get_auth_head(repository):
-    Docker.__print('{}: Authenticating...'.format(repository))
-
     uri = 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:pull'.format(repository)
     
     request = Request(method='GET', url=uri)
@@ -67,9 +79,6 @@ class Docker(object):
     assert response.status == 200, 'unable to authorize docker pull for {} with {} {}'.format(repository, response.status, response.read().decode('utf-8'))
     
     data = json.loads(response.read().decode('utf-8'))
-
-    sys.stdout.write("\r\033[K")
-    sys.stdout.flush()
     return {
       'Authorization': 'Bearer {}'.format(data['token']),
       'Accept': 'application/vnd.docker.distribution.manifest.v2+json'
@@ -98,12 +107,7 @@ class Docker(object):
     tag = repository + ':sha256(' + layer['digest'][7:19] + ')'
     file = source.strip(os.path.sep)
 
-    Docker.__print('{}: Downloading...'.format(tag))
-
-    if len(layer.get('urls', [])):
-      uri = layer['urls'][0]
-    else:
-      uri = 'https://index.docker.io/v2/{}/blobs/{}'.format(repository, layer['digest'])
+    uri = 'https://index.docker.io/v2/{}/blobs/{}'.format(repository, layer['digest'])
     
     auth_headers = Docker.__get_auth_head(repository)
     request = Request(method='GET', url=uri)
@@ -117,17 +121,17 @@ class Docker(object):
     block_size = max(int(total_size/1000), 1024**2)
     downloaded_size = 0
 
-    fileobj = tempfile.NamedTemporaryFile(dir='.')
-
-    Docker.__progress_bar(tag, 0, total_size)
+    fileobj = io.BytesIO()
+    Docker.__progress_bar('{}: Downloading'.format(tag), 0, total_size)
     while downloaded_size < total_size:
       block = response.read(min(block_size, total_size-downloaded_size))
       if not block:
         break
       fileobj.write(block)
       downloaded_size += len(block)
-      Docker.__progress_bar(tag, downloaded_size, total_size)
+      Docker.__progress_bar('{}: Downloading'.format(tag), downloaded_size, total_size)
 
+    fileobj.seek(0)
     Docker.__print('{}: Downloaded Layer'.format(tag))
 
     del response
@@ -136,25 +140,28 @@ class Docker(object):
       Docker.__print('')
       return False
 
-    Docker.__print('{}: Scanning Layer for /{} ...'.format(tag, file))
+    Docker.__progress_bar('{}: Scanning'.format(tag), 0, total_members)
 
-    tarf = tarfile.open(fileobj.name, mode='r:gz')
+    with tarfile.open(fileobj=fileobj, bufsize=total_size, mode='r:gz') as tarf:
+      members = tarf.getmembers()
+      total_members = len(members)
 
-    for member in tarf.getmembers():
-      if member.name != file:
-        continue
-      Docker.__print('{}: Extracting {}...'.format(tag, file))
-      tgt = os.path.realpath(os.path.join(target, os.path.basename(file)))
-      
-      with tarf.extractfile(member) as fs:
-        with open(tgt, 'wb') as fd:
-          shutil.copyfileobj(fs, fd)
+      for idx, member in enumerate(members):
+        Docker.__progress_bar('{}: Scanning'.format(tag), idx+1, total_members)
+        if member.name != file:
+          continue
+        tgt = os.path.realpath(os.path.join(target, os.path.basename(file)))
+        Docker.__print('{}: Extracting...'.format(tag))
+        
+        with tarf.extractfile(member) as fs:
+          with open(tgt, 'wb') as fd:
+            shutil.copyfileobj(fs, fd)
 
-      Docker.__print('Downloaded {}\n'.format(tgt))
-      return True
+        Docker.__print('Downloaded {}\n'.format(tgt))
+        return True
 
-    Docker.__print('')
-    return False
+      Docker.__print('')
+      return False
 
 
 class Package(object):
