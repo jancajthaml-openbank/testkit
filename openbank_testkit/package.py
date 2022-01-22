@@ -120,11 +120,12 @@ class Docker(object):
 
     assert response.status == 200, 'unable to download layer {}:{} with {} {}'.format(repository, layer['digest'], response.status, response.read().decode('utf-8'))
 
-    Docker.__progress_bar('{}: Downloading'.format(tag), 0, 50)
 
     total_size = int(response.getheader('Content-Length'))
     block_size = max(int(total_size/1000), 1024**2)
     downloaded_size = 0
+
+    Docker.__progress_bar('{}: Downloading'.format(tag), 0, total_size)
 
     fileobj = io.BytesIO()
 
@@ -145,11 +146,11 @@ class Docker(object):
       Docker.__print('')
       return False
 
-    Docker.__progress_bar('{}: Scanning'.format(tag), 0, 50)
-
     with tarfile.open(fileobj=fileobj, bufsize=total_size, mode='r:gz') as tarf:
       members = tarf.getmembers()
       total_members = len(members)
+
+      Docker.__progress_bar('{}: Scanning'.format(tag), 0, total_members)
 
       for idx, member in enumerate(members):
         Docker.__progress_bar('{}: Scanning'.format(tag), idx+1, total_members)
